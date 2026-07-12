@@ -19,27 +19,41 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.8,
-      max_tokens: 1500,
-    }),
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 3000 * attempt));
+    }
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`LLM API ошибка ${res.status}: ${err.slice(0, 300)}`);
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.8,
+        max_tokens: 1500,
+      }),
+    });
+
+    if (res.status === 429) {
+      continue;
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`LLM API ошибка ${res.status}: ${err.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error("Пустой ответ от ИИ");
+    return content;
   }
 
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  throw new Error("Сервер ИИ перегружен. Попробуйте через минуту.");
 }
 
 export async function POST(
@@ -70,7 +84,7 @@ export async function POST(
 
     const systemPrompt = `Ты — профессиональный копирайтер для Telegram-рекламы.
 Правила:
-- Текст 3-8 предложений
+- Текст 3-8 предложений на русском языке
 - Используй 2-4 эмодзи (не больше)
 - Обязательно добавь призыв к действию (CTA)
 - Текст должен быть привлекательным и продающим

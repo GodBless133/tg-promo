@@ -19,27 +19,43 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-    }),
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 3s, 6s
+      await new Promise((r) => setTimeout(r, 3000 * attempt));
+    }
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`LLM API ошибка ${res.status}: ${err.slice(0, 300)}`);
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (res.status === 429) {
+      // Rate limited — retry
+      continue;
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`LLM API ошибка ${res.status}: ${err.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error("Пустой ответ от ИИ");
+    return content;
   }
 
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  throw new Error("Сервер ИИ перегружен. Попробуйте через минуту.");
 }
 
 export async function POST(
@@ -65,16 +81,23 @@ export async function POST(
 ПРАВИЛА:
 - tgLink ВСЕГДА начинается с "t.me/"
 - membersCount — реалистичное число от 500 до 100000
-- description — 1-2 предложения на русском, что это за канал
+- description — 1-2 предложения на русском
 - category — категория на русском
 
 Формат ответа — ТОЛЬКО JSON массив без markdown, без комментариев:
 [{"title":"Имя канала","tgLink":"t.me/example","description":"Описание канала","membersCount":5000,"category":"Категория"}]
 
-Верни 4-8 результатов. Используй реальные известные Telegram каналы по теме если знаешь.`;
+Верни 4-8 результатов.`;
+
+    const typeLabel =
+      campaign.targetType === "bot"
+        ? "бота"
+        : campaign.targetType === "chat"
+          ? "чата"
+          : "канала";
 
     const userPrompt = `Найди Telegram каналы и чаты для размещения рекламы по теме: "${topic}".
-Тип рекламируемого ресурса: ${campaign.targetType === "bot" ? "бот" : campaign.targetType === "chat" ? "чат" : "канал"}.
+Тип рекламируемого ресурса: ${typeLabel}.
 Описание: ${campaign.description || "не указано"}.
 
 Предложи подходящие каналы/чаты для размещения рекламы.`;
