@@ -69,3 +69,26 @@ Stage Summary:
 - No API keys needed - uses free Pollinations AI
 - Retry logic handles rate limiting gracefully
 - App should be live on Railway after auto-redeploy completes
+
+---
+Task ID: 4
+Agent: main
+Task: Fix JSON error + add Telegram account connection and real message sending
+
+Work Log:
+- Fixed "Unexpected end of JSON input" error by adding safeJson() helper
+- Added TgAccount model to Prisma schema (phone, apiId, apiHash, session, status)
+- Created Python Telethon mini-service (mini-services/tg-sender/server.py)
+  - Auth flow: /auth/start → /auth/verify → /auth/2fa
+  - Send messages via /send endpoint
+  - Session persistence in SQLite DB
+- Created 5 API routes for TG account management
+- Added "Аккаунт" tab to navigation with full connection UI
+- Updated scheduler to send real messages via TG sender service
+- Created start.sh to launch TG sender alongside Next.js on Railway
+
+Stage Summary:
+- JSON error fixed with safeJson() wrapper
+- Full Telegram account auth flow (phone → code → 2FA)
+- Real message sending via Telethon userbot
+- Pushed to GitHub: commit 5f32f43
