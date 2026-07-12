@@ -829,16 +829,29 @@ function ChatSearchPanel({ campaignId }: { campaignId: string }) {
   const searchMutation = useMutation({
     mutationFn: async () => {
       setIsSearchingChats(true);
-      setSearchProgress("Ищем чаты в интернете...");
-      const res = await fetch(`/api/campaigns/${campaignId}/search-chats`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Ошибка поиска");
-      return data;
+      setSearchProgress("Подключение к ИИ...");
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 150000);
+      try {
+        setSearchProgress("Ищем чаты в интернете...");
+        const res = await fetch(`/api/campaigns/${campaignId}/search-chats`, {
+          method: "POST",
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Ошибка поиска");
+        if (data.success === false && data.error) throw new Error(data.error);
+        return data;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
     onSuccess: (data) => {
-      toast.success(`Найдено ${data.count} чатов!`);
+      if (data.count > 0) {
+        toast.success(`Найдено ${data.count} чатов!`);
+      } else {
+        toast.warning("Чаты не найдены, попробуйте другую тему");
+      }
       queryClient.invalidateQueries({ queryKey: ["chats", campaignId] });
       queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] });
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
@@ -846,7 +859,10 @@ function ChatSearchPanel({ campaignId }: { campaignId: string }) {
       setManualOverrides({});
     },
     onError: (err) => {
-      toast.error(err.message);
+      const msg = err.name === "AbortError"
+        ? "Превышено время ожидания. Попробуйте ещё раз."
+        : err.message;
+      toast.error(msg);
     },
     onSettled: () => {
       setIsSearchingChats(false);
@@ -1029,23 +1045,37 @@ function AdGeneratorPanel({ campaignId }: { campaignId: string }) {
   const generateMutation = useMutation({
     mutationFn: async () => {
       setIsGeneratingAds(true);
-      const res = await fetch(`/api/campaigns/${campaignId}/generate-ads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: parseInt(variantCount) }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Ошибка генерации");
-      return data;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000);
+      try {
+        const res = await fetch(`/api/campaigns/${campaignId}/generate-ads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ count: parseInt(variantCount) }),
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Ошибка генерации");
+        return data;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
     onSuccess: (data) => {
-      toast.success(`Сгенерировано ${data.count} вариантов!`);
+      if (data.count > 0) {
+        toast.success(`Сгенерировано ${data.count} вариантов!`);
+      } else {
+        toast.warning("Не удалось сгенерировать тексты");
+      }
       queryClient.invalidateQueries({ queryKey: ["ads", campaignId] });
       queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] });
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
     },
-    onError: () => {
-      toast.error("Не удалось сгенерировать текст");
+    onError: (err) => {
+      const msg = err.name === "AbortError"
+        ? "Превышено время ожидания. Попробуйте ещё раз."
+        : err.message;
+      toast.error(msg);
     },
     onSettled: () => {
       setIsGeneratingAds(false);
