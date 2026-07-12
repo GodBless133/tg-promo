@@ -1,0 +1,13 @@
+{
+  "name": "tg-promo-tg-sender",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.11.1",
+    "telegram": "^2.26.22",
+    "tsx": "^4.19.0"
+  }
+}

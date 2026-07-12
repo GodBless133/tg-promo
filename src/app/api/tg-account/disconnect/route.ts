@@ -1,24 +1,26 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+
+const TG_PORT = 3011;
+
+async function proxyToTgService(path: string, options?: RequestInit) {
+  try {
+    const url = `http://localhost:${TG_PORT}${path}`;
+    const res = await fetch(url, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers },
+    });
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch {
+    return NextResponse.json(
+      { error: "Сервис Telegram не запущен. Подождите несколько секунд и попробуйте снова." },
+      { status: 503 }
+    );
+  }
+}
 
 export async function POST() {
-  try {
-    const account = await db.tgAccount.findFirst();
-    if (account) {
-      await db.tgAccount.update({
-        where: { id: account.id },
-        data: {
-          session: null,
-          status: "disconnected",
-          firstName: null,
-          lastName: null,
-          username: null,
-        },
-      });
-    }
-    return NextResponse.json({ success: true, message: "Аккаунт отключён" });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Ошибка отключения";
-    return NextResponse.json({ error: msg }, { status: 503 });
-  }
+  return proxyToTgService("/auth/disconnect", {
+    method: "DELETE",
+  });
 }

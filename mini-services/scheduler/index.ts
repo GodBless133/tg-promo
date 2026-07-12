@@ -2,23 +2,17 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 const CHECK_INTERVAL = 15000;
+const TG_PORT = 3011;
 
-async function sendViaTelegram(chatLink: string, text: string, apiId: number, apiHash: string, session: string) {
-  const { TelegramClient } = await import("telegram");
-  const { StringSession } = await import("telegram/sessions");
-
-  const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
-    connectionRetries: 2,
+async function sendViaTelegram(chatLink: string, text: string) {
+  const res = await fetch(`http://localhost:${TG_PORT}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatUsername: chatLink, text }),
   });
-  await client.connect();
-
-  try {
-    const username = chatLink.replace("https://t.me/", "").replace("t.me/", "").replace("@", "");
-    const entity = await client.getEntity(username);
-    await client.sendMessage(entity, { message: text });
-  } finally {
-    await client.disconnect();
-  }
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || "Send failed");
+  return data;
 }
 
 async function processPendingSends() {
@@ -42,7 +36,7 @@ async function processPendingSends() {
       if (!account?.session) throw new Error("Telegram аккаунт не подключён");
 
       console.log(`[SEND] "${log.campaign.name}" → ${chatLink}`);
-      await sendViaTelegram(chatLink, adText, account.apiId, account.apiHash, account.session);
+      await sendViaTelegram(chatLink, adText);
 
       await prisma.sendLog.update({
         where: { id: log.id },
@@ -52,11 +46,11 @@ async function processPendingSends() {
         await prisma.adPost.update({ where: { id: log.adPostId }, data: { status: "sent" } });
       }
       console.log(`  ✓ Отправлено`);
-    } catch (error) {
-      console.error(`  ✗ Ошибка:`, error);
+    } catch (error: any) {
+      console.error(`  ✗ Ошибка:`, error.message || error);
       await prisma.sendLog.update({
         where: { id: log.id },
-        data: { status: "failed", errorMsg: String(error) },
+        data: { status: "failed", errorMsg: String(error.message || error) },
       });
     }
   }
