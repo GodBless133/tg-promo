@@ -316,6 +316,70 @@ async function handleSendMessage(body) {
   }
 }
 
+// Resolve multiple chat links → get real titles and member counts
+async function handleResolve(body) {
+  const links = body.links;
+  if (!Array.isArray(links) || links.length === 0) {
+    return { results: [] };
+  }
+
+  const account = await getAccount();
+  if (!account || !account.session) {
+    return { results: [] };
+  }
+
+  const results = [];
+
+  try {
+    const client = await tgConnect(account.apiId, account.apiHash, account.session);
+
+    for (const link of links) {
+      try {
+        const username = String(link)
+          .replace("https://t.me/", "")
+          .replace("t.me/", "")
+          .replace("@", "");
+
+        const entity = await client.getEntity(username);
+
+        let members = 0;
+        if (entity.participantsCount) {
+          members = entity.participantsCount;
+        }
+
+        // For channels/supergroups, fetch full info
+        if (entity.className === "Channel" || entity.className === "ChannelFull") {
+          try {
+            const { Api } = require("telegram/tl");
+            const full = await client.invoke(
+              new Api.channels.GetFullChannel({ channel: entity })
+            );
+            if (full.fullChat?.participantsCount) {
+              members = full.fullChat.participantsCount;
+            }
+          } catch { /* use default */ }
+        }
+
+        results.push({
+          link,
+          title: entity.title || username,
+          members,
+        });
+      } catch (e) {
+        // Chat not found or private — skip
+        console.log(`[TG] Resolve failed for ${link}: ${e.message || e}`);
+      }
+    }
+
+    await client.disconnect();
+  } catch (e) {
+    console.error("[TG] Resolve error:", e.message || e);
+  }
+
+  console.log(`[TG] Resolved ${results.length}/${links.length} chats`);
+  return { results };
+}
+
 async function handleDisconnect() {
   if (authClient) {
     try { await authClient.disconnect(); } catch { /* ignore */ }
@@ -389,6 +453,13 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       const result = await handleAuth2fa(body);
       return sendJson(res, result, result.success ? 200 : 400);
+    }
+
+    // POST /resolve
+    if (method === "POST" && pathname === "/resolve") {
+      const body = await readBody(req);
+      const result = await handleResolve(body);
+      return sendJson(res, result);
     }
 
     // POST /send
