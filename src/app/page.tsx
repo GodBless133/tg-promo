@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Send,
   LayoutDashboard,
@@ -29,6 +29,10 @@ import {
   Settings2,
   Zap,
   Target,
+  UserCircle,
+  ShieldCheck,
+  ShieldX,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,6 +71,14 @@ import type {
   SendLog,
   TargetType,
 } from "@/lib/types";
+
+// Safe JSON parse — handles empty/truncated responses
+async function safeJson(res: Response) {
+  const text = await res.text();
+  if (!text.trim()) throw new Error("Сервер вернул пустой ответ. Попробуйте ещё раз.");
+  try { return JSON.parse(text); }
+  catch { throw new Error(text.slice(0, 200) || "Некорректный ответ сервера"); }
+}
 
 // ─── Status Badge Helper ───────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -499,7 +511,7 @@ function CampaignDetail({ campaignId, onBack }: { campaignId: string; onBack: ()
   const startMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/campaigns/${campaignId}/start`, { method: "POST" });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error);
       return data;
     },
@@ -838,7 +850,7 @@ function ChatSearchPanel({ campaignId }: { campaignId: string }) {
           method: "POST",
           signal: controller.signal,
         });
-        const data = await res.json();
+        const data = await safeJson(res);
         if (!res.ok) throw new Error(data.error || "Ошибка поиска");
         if (data.success === false && data.error) throw new Error(data.error);
         return data;
@@ -1054,7 +1066,7 @@ function AdGeneratorPanel({ campaignId }: { campaignId: string }) {
           body: JSON.stringify({ count: parseInt(variantCount) }),
           signal: controller.signal,
         });
-        const data = await res.json();
+        const data = await safeJson(res);
         if (!res.ok) throw new Error(data.error || "Ошибка генерации");
         return data;
       } finally {
@@ -1366,6 +1378,281 @@ function CampaignInfo({ campaign }: { campaign: Campaign }) {
   );
 }
 
+// ─── Telegram Account Panel ─────────────────────────────
+type AuthStep = "idle" | "code" | "2fa";
+
+function TelegramAccountPanel() {
+  const [status, setStatus] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [step, setStep] = useState<AuthStep>("idle");
+  const [phone, setPhone] = useState("");
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch("/api/tg-account");
+      const data = await res.json();
+      setStatus(data);
+
+      if (data.status === "awaiting_code") setStep("code");
+      else if (data.status === "awaiting_2fa") setStep("2fa");
+      else if (data.status === "connected") setStep("idle");
+      else setStep("idle");
+    } catch {
+      setStatus({ connected: false, status: "none", phone: null });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchStatus(); }, []);
+
+  const handleConnect = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/tg-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, apiId, apiHash }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Код отправлен в Telegram!");
+        setStep("code");
+        fetchStatus();
+      } else {
+        toast.error(data.error || "Ошибка подключения");
+      }
+    } catch { toast.error("Сервис Telegram недоступен"); }
+    finally { setActionLoading(false); }
+  };
+
+  const handleVerifyCode = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/tg-account/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Аккаунт подключён!");
+        setStep("idle");
+        fetchStatus();
+      } else if (data.need2fa) {
+        toast.info("Требуется двухфакторная аутентификация");
+        setStep("2fa");
+        fetchStatus();
+      } else {
+        toast.error(data.error || "Неверный код");
+      }
+    } catch { toast.error("Ошибка верификации"); }
+    finally { setActionLoading(false); }
+  };
+
+  const handleVerify2fa = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/tg-account/2fa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Аккаунт подключён!");
+        setStep("idle");
+        fetchStatus();
+      } else {
+        toast.error(data.error || "Неверный пароль");
+      }
+    } catch { toast.error("Ошибка 2FA"); }
+    finally { setActionLoading(false); }
+  };
+
+  const handleDisconnect = async () => {
+    setActionLoading(true);
+    try {
+      await fetch("/api/tg-account/disconnect", { method: "POST" });
+      toast.success("Аккаунт отключён");
+      setStep("idle");
+      setPhone(""); setApiId(""); setApiHash("");
+      fetchStatus();
+    } catch { toast.error("Ошибка отключения"); }
+    finally { setActionLoading(false); }
+  };
+
+  const isConnected = status?.connected === true;
+
+  if (loading) {
+    return <div className="p-6"><Skeleton className="h-96 rounded-xl" /></div>;
+  }
+
+  return (
+    <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+          <Smartphone className="h-6 w-6" />
+          Telegram Аккаунт
+        </h1>
+        <p className="text-muted-foreground mt-1">
+          Подключите аккаунт для автоматической отправки рекламы
+        </p>
+      </div>
+
+      {/* Connection Status */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            Статус подключения
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isConnected ? (
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center">
+                <ShieldCheck className="h-5 w-5 text-emerald-600" />
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">
+                  {status.firstName || ""} {status.lastName || ""}
+                  {status.username ? ` (@${status.username})` : ""}
+                </p>
+                <p className="text-sm text-muted-foreground">{status.phone as string}</p>
+              </div>
+              <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">Подключён</Badge>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+                <ShieldX className="h-5 w-5 text-zinc-400" />
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground">Не подключён</p>
+                <p className="text-sm text-muted-foreground">Аккаунт не привязан</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Auth Form */}
+      {!isConnected && step === "idle" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Подключение аккаунта</CardTitle>
+            <CardDescription>
+              Данные нужны для авторизации через Telegram API. Получите API ID и Hash на{" "}
+              <a href="https://my.telegram.org/apps" target="_blank" rel="noopener" className="text-primary underline">
+                my.telegram.org
+              </a>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Номер телефона</Label>
+              <Input placeholder="+79001234567" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>API ID</Label>
+                <Input placeholder="12345678" value={apiId} onChange={(e) => setApiId(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>API Hash</Label>
+                <Input placeholder="abc123def456..." value={apiHash} onChange={(e) => setApiHash(e.target.value)} />
+              </div>
+            </div>
+            <Button className="w-full" onClick={handleConnect} disabled={actionLoading || !phone || !apiId || !apiHash}>
+              {actionLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+              Получить код
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Code Verification */}
+      {!isConnected && step === "code" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <UserCircle className="h-5 w-5" />
+              Введите код из Telegram
+            </CardTitle>
+            <CardDescription>Код отправлен на номер {status?.phone || phone}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Код подтверждения</Label>
+              <Input placeholder="12345" value={code} onChange={(e) => setCode(e.target.value)} autoFocus />
+            </div>
+            <Button className="w-full" onClick={handleVerifyCode} disabled={actionLoading || !code}>
+              {actionLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+              Подтвердить
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 2FA */}
+      {!isConnected && step === "2fa" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Двухфакторная аутентификация</CardTitle>
+            <CardDescription>Введите пароль от вашего Telegram аккаунта</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Пароль</Label>
+              <Input type="password" placeholder="••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <Button className="w-full" onClick={handleVerify2fa} disabled={actionLoading || !password}>
+              {actionLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+              Подтвердить пароль
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Connected actions */}
+      {isConnected && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Управление</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button variant="destructive" onClick={handleDisconnect} disabled={actionLoading}>
+              {actionLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <XCircle className="h-4 w-4 mr-2" />}
+              Отключить аккаунт
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Info */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p><strong className="text-foreground">Как получить API ID и Hash:</strong></p>
+            <ol className="list-decimal list-inside space-y-1 ml-2">
+              <li>Откройте <a href="https://my.telegram.org/apps" target="_blank" rel="noopener" className="text-primary underline">my.telegram.org</a></li>
+              <li>Войдите с номером телефона</li>
+              <li>Создайте приложение (любое название)</li>
+              <li>Скопируйте <code className="bg-muted px-1 rounded">api_id</code> и <code className="bg-muted px-1 rounded">api_hash</code></li>
+            </ol>
+            <p className="pt-2"><strong className="text-foreground">Безопасность:</strong> Сессия хранится локально и не передаётся третьим лицам.</p>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Main Page ──────────────────────────────────────────
 export default function Home() {
   const { activeTab, setActiveTab, selectedCampaignId, setSelectedCampaignId } = useAppStore();
@@ -1404,6 +1691,14 @@ export default function Home() {
               <Megaphone className="h-4 w-4 mr-1.5" />
               <span className="hidden sm:inline">Кампании</span>
             </Button>
+            <Button
+              variant={activeTab === "account" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("account")}
+            >
+              <UserCircle className="h-4 w-4 mr-1.5" />
+              <span className="hidden sm:inline">Аккаунт</span>
+            </Button>
           </nav>
         </div>
       </header>
@@ -1414,6 +1709,8 @@ export default function Home() {
           <CampaignDetail campaignId={selectedCampaignId} onBack={handleBack} />
         ) : activeTab === "dashboard" ? (
           <Dashboard />
+        ) : activeTab === "account" ? (
+          <TelegramAccountPanel />
         ) : (
           <CampaignList onSelect={handleSelectCampaign} />
         )}

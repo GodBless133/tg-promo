@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "npx prisma generate && next build",
-    "start": "mkdir -p db && npx prisma db push --skip-generate 2>/dev/null; next start",
+    "start": "mkdir -p db && npx prisma db push --skip-generate 2>/dev/null; bash start.sh next start",
     "lint": "eslint .",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",

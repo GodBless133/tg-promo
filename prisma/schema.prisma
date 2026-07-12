@@ -66,3 +66,17 @@ model SendLog {
   targetChat TargetChat? @relation(fields: [targetChatId], references: [id], onDelete: SetNull)
   adPost     AdPost?    @relation(fields: [adPostId], references: [id], onDelete: SetNull)
 }
+
+model TgAccount {
+  id        String   @id @default(cuid())
+  phone     String
+  apiId     Int
+  apiHash   String
+  session   String?  // Telethon StringSession
+  status    String   @default("disconnected") // disconnected, awaiting_code, awaiting_2fa, connected
+  firstName String?
+  lastName  String?
+  username  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

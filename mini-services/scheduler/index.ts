@@ -3,17 +3,39 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 const CHECK_INTERVAL = 15000; // Check every 15 seconds
+const TG_SENDER = "http://localhost:3011";
+
+async function sendViaTelegram(chatLink: string, text: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Check if TG sender service is available
+    const statusRes = await fetch(`${TG_SENDER}/status`, { signal: AbortSignal.timeout(3000) });
+    const statusData = await statusRes.json();
+
+    if (!statusData.connected) {
+      return { success: false, error: "Telegram аккаунт не подключён" };
+    }
+
+    // Send via TG sender service
+    const sendRes = await fetch(`${TG_SENDER}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatUsername: chatLink, text }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const sendData = await sendRes.json();
+    return sendData;
+  } catch (e) {
+    return { success: false, error: `Сервис Telegram недоступен: ${e instanceof Error ? e.message : "unknown"}` };
+  }
+}
 
 async function processPendingSends() {
   const now = new Date();
 
-  // Find all pending send logs that are scheduled for now or earlier
   const pendingLogs = await prisma.sendLog.findMany({
     where: {
       status: "pending",
-      scheduledAt: {
-        lte: now,
-      },
+      scheduledAt: { lte: now },
     },
     include: {
       campaign: true,
@@ -24,33 +46,35 @@ async function processPendingSends() {
 
   for (const log of pendingLogs) {
     try {
-      // In a real production app, this would send the message via Telegram Bot API
-      // For now we simulate the send by marking it as sent
-      console.log(
-        `[SEND] Campaign: "${log.campaign.name}" → Chat: "${log.targetChat?.title || "unknown"}"`
-      );
-      console.log(`  Ad text: "${log.adPost?.content?.slice(0, 80)}..."`);
-      console.log(`  Target chat link: ${log.targetChat?.tgLink || "N/A"}`);
+      const chatLink = log.targetChat?.tgLink;
+      const adText = log.adPost?.content;
 
-      await prisma.sendLog.update({
-        where: { id: log.id },
-        data: {
-          status: "sent",
-          sentAt: new Date(),
-        },
-      });
-
-      // Also update the ad post status
-      if (log.adPostId) {
-        await prisma.adPost.update({
-          where: { id: log.adPostId },
-          data: { status: "sent" },
-        });
+      if (!chatLink || !adText) {
+        throw new Error("Нет чата или текста рекламы");
       }
 
-      console.log(`  ✓ Marked as sent`);
+      console.log(`[SEND] "${log.campaign.name}" → ${chatLink}`);
+
+      // Try real send
+      const result = await sendViaTelegram(chatLink, adText);
+
+      if (result.success) {
+        await prisma.sendLog.update({
+          where: { id: log.id },
+          data: { status: "sent", sentAt: new Date() },
+        });
+        if (log.adPostId) {
+          await prisma.adPost.update({
+            where: { id: log.adPostId },
+            data: { status: "sent" },
+          });
+        }
+        console.log(`  ✓ Отправлено`);
+      } else {
+        throw new Error(result.error || "Ошибка отправки");
+      }
     } catch (error) {
-      console.error(`  ✗ Failed to process log ${log.id}:`, error);
+      console.error(`  ✗ Ошибка:`, error);
       await prisma.sendLog.update({
         where: { id: log.id },
         data: {
@@ -61,19 +85,12 @@ async function processPendingSends() {
     }
   }
 
-  // Check if all logs for an active campaign are done
+  // Check if all logs for active campaigns are done
   const activeCampaigns = await prisma.campaign.findMany({
     where: { status: "active" },
     include: {
-      _count: {
-        select: {
-          sendLogs: true,
-        },
-      },
       sendLogs: {
-        where: {
-          status: "pending",
-        },
+        where: { status: "pending" },
         select: { id: true },
       },
     },
@@ -81,27 +98,19 @@ async function processPendingSends() {
 
   for (const campaign of activeCampaigns) {
     if (campaign.sendLogs.length === 0) {
-      // No more pending logs → mark campaign as completed
       await prisma.campaign.update({
         where: { id: campaign.id },
         data: { status: "completed" },
       });
-      console.log(
-        `[COMPLETE] Campaign "${campaign.name}" - all sends processed`
-      );
+      console.log(`[COMPLETE] "${campaign.name}"`);
     }
   }
 }
 
 async function main() {
-  console.log("🔄 TG Promo Scheduler started");
-  console.log(`   Check interval: ${CHECK_INTERVAL / 1000}s`);
-  console.log(`   Time: ${new Date().toISOString()}`);
-
-  // Run immediately on start
+  console.log("Scheduler started");
   await processPendingSends();
 
-  // Then run periodically
   setInterval(async () => {
     try {
       await processPendingSends();
