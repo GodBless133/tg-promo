@@ -49,3 +49,23 @@ Stage Summary:
 - Default model: gpt-4o-mini (configurable via OPENAI_MODEL)
 - Railway auto-deploy will pick up the changes from GitHub push
 - User needs to set OPENAI_API_KEY in Railway environment variables
+
+---
+Task ID: 3
+Agent: main
+Task: Make AI features work on Railway without API keys using Pollinations AI
+
+Work Log:
+- Replaced z-ai-web-dev-sdk/mini-service proxy with direct Pollinations AI API calls
+- Pollinations AI: free, no authentication, OpenAI-compatible endpoint
+- Tested Pollinations API directly - confirmed it returns valid JSON responses
+- Added retry logic with exponential backoff for 429 rate limiting
+- Default model: "openai" (Pollinations), falls back to gpt-4o-mini if OPENAI_API_KEY set
+- Pushed 3 commits to GitHub: 87acece, e1eb428, 65a96cb
+- Railway auto-deploys from GitHub - no manual configuration needed
+
+Stage Summary:
+- AI features (search chats + generate ads) now work out-of-the-box on Railway
+- No API keys needed - uses free Pollinations AI
+- Retry logic handles rate limiting gracefully
+- App should be live on Railway after auto-redeploy completes
