@@ -1,54 +1,53 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Build
+.next/
+out/
+dist/
+build/
 
-# testing
-/coverage
+# Database
+db/*.db
+db/*.db-journal
 
-# next.js
-/.next/
-/out/
+# Environment
+.env
+.env.local
+.env.production
+.env.staging
 
-# production
-/build
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# misc
+# OS
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
+# Logs
 *.log
 dev.log
-dev.out.log
-test
-prompt
-
 server.log
-# Skills directory
-/skills/
+
+# Bun
+bun.lock
+
+# Misc
+.tool-versions
+*.tsbuildinfo
+.eslintcache
+worklog.md
+
+# Skills (not part of the project)
+skills/
+
+# Generated
+download/
+tool-results/
+mini-services/scheduler/node_modules/
+mini-services/scheduler/bun.lock
