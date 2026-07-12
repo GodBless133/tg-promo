@@ -92,3 +92,33 @@ Stage Summary:
 - Full Telegram account auth flow (phone → code → 2FA)
 - Real message sending via Telethon userbot
 - Pushed to GitHub: commit 5f32f43
+---
+Task ID: 5
+Agent: main
+Task: Fix "fetch failed" / "ошибка при вводе кода" by rewriting TG sender as Node.js mini-service
+
+Work Log:
+- Diagnosed root cause: API routes imported `telegram` npm package directly inside Next.js, causing runtime bundling failures
+- Previous Python Telethon service (server.py) couldn't run on Railway (no Python runtime)
+- Created Node.js TG sender mini-service (mini-services/tg-sender/server.js):
+  - Pure JavaScript (CommonJS) — no compilation needed
+  - Uses GramJS (telegram npm package) directly via require()
+  - Uses Prisma for DB access
+  - Maintains persistent auth state (client connection + phoneCodeHash) between requests
+  - Runs on port 3011 as a separate Node.js process
+  - Handles: /status, /auth/start, /auth/verify, /auth/2fa, /send, /auth/disconnect
+- Rewrote all 5 API routes (/api/tg-account/*) to be simple HTTP proxies to the TG sender service
+- Updated start.sh to launch TG sender in background before Next.js
+- Updated scheduler to use TG sender proxy for message sending (no direct telegram imports)
+- Made start.sh executable
+- Verified locally:
+  - TG sender starts and responds to /health and /status endpoints
+  - API proxy (GET /api/tg-account) correctly returns data from TG sender
+  - ESLint passes with no errors
+- Pushed 2 commits to GitHub: cfaf3cc, 90af9be
+
+Stage Summary:
+- TG auth flow now runs in a separate Node.js process, avoiding Next.js bundling issues
+- All API routes are lightweight proxies with proper error handling (503 if TG service not ready)
+- The TG sender maintains persistent state for the auth flow (client + code hash in memory)
+- Ready for Railway deployment via `railway up`
