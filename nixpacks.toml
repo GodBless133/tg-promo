@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["...", "sqlite"]
+
+[phases.install]
+cmds = ["npm ci --ignore-scripts", "npx prisma generate"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npx prisma db push --skip-generate 2>/dev/null; node .next/standalone/server.js"
