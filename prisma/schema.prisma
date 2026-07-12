@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Campaign {
+  id              String      @id @default(cuid())
+  name            String
+  description     String?
+  targetUrl       String      // ссылка на рекламируемый ТГ канал/чат/бот
+  targetType      String      @default("channel") // channel, chat, bot
+  topic           String?     // тематика рекламы
+  status          String      @default("draft") // draft, active, paused, completed
+  intervalMinutes Int         @default(30) // интервал отправки в минутах
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  targetChats TargetChat[]
+  adPosts     AdPost[]
+  sendLogs    SendLog[]
+}
+
+model TargetChat {
+  id           String   @id @default(cuid())
+  campaignId   String
+  title        String
+  tgLink       String
+  description  String?
+  membersCount Int?
+  category     String?
+  status       String   @default("found") // found, selected, skipped
+  foundAt      DateTime @default(now())
+
+  campaign Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sendLogs SendLog[]
+}
+
+model AdPost {
+  id         String   @id @default(cuid())
+  campaignId String
+  content    String
+  variant    Int      @default(1)
+  status     String   @default("generated") // generated, approved, sent, failed
+  createdAt  DateTime @default(now())
+
+  campaign Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sendLogs SendLog[]
+}
+
+model SendLog {
+  id          String    @id @default(cuid())
+  campaignId  String
+  targetChatId String?
+  adPostId    String?
+  status      String    @default("pending") // pending, sent, failed
+  errorMsg    String?
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  campaign   Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  targetChat TargetChat? @relation(fields: [targetChatId], references: [id], onDelete: SetNull)
+  adPost     AdPost?    @relation(fields: [adPostId], references: [id], onDelete: SetNull)
+}
