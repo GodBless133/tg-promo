@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const TG_SENDER = "http://localhost:3011";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions";
+import { db } from "@/lib/db";
+import { getTgCodeHash, clearTgCodeHash } from "@/lib/tg-state";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,17 +13,68 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Введите код" }, { status: 400 });
     }
 
-    const res = await fetch(`${TG_SENDER}/auth/verify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-      signal: AbortSignal.timeout(30000),
-    });
+    const account = await db.tgAccount.findFirst();
+    if (!account) {
+      return NextResponse.json({ error: "Сначала подключите аккаунт" }, { status: 400 });
+    }
 
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.ok ? 200 : 400 });
+    const session = new StringSession(account.session || "");
+    const client = new TelegramClient(session, account.apiId, account.apiHash, {
+      connectionRetries: 3,
+    });
+    await client.connect();
+
+    try {
+      const codeHash = getTgCodeHash() || "";
+      await client.signIn({
+        phone: account.phone,
+        code,
+        phoneCodeHash: codeHash,
+      });
+
+      const sessionStr = client.session.save();
+      const me = await client.getMe();
+
+      await db.tgAccount.update({
+        where: { id: account.id },
+        data: {
+          session: sessionStr,
+          status: "connected",
+          firstName: me.firstName,
+          lastName: me.lastName || null,
+          username: me.username || null,
+        },
+      });
+
+      clearTgCodeHash();
+      await client.disconnect();
+
+      return NextResponse.json({
+        success: true,
+        message: "Аккаунт подключён!",
+        user: { firstName: me.firstName, lastName: me.lastName, username: me.username },
+      });
+    } catch (e: unknown) {
+      await client.disconnect();
+      const err = e as Error;
+
+      if (err.message?.includes("PASSWORD_HASH_INVALID") || err.message?.includes("Two-steps verification")) {
+        await db.tgAccount.update({
+          where: { id: account.id },
+          data: { status: "awaiting_2fa" },
+        });
+        return NextResponse.json({
+          success: false,
+          need2fa: true,
+          error: "Требуется двухфакторная аутентификация",
+        });
+      }
+
+      throw e;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка верификации";
+    console.error("TG verify:", msg);
     return NextResponse.json({ error: msg }, { status: 503 });
   }
 }

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "npx prisma generate && next build",
-    "start": "mkdir -p db && npx prisma db push --skip-generate 2>/dev/null; bash start.sh next start",
+    "start": "mkdir -p db && npx prisma db push --skip-generate 2>/dev/null; next start",
     "lint": "eslint .",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
@@ -74,6 +74,7 @@
     "sonner": "^2.0.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
+    "telegram": "^2.26.22",
     "uuid": "^11.1.0",
     "vaul": "^1.1.2",
     "zod": "^4.0.2",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const TG_SENDER = "http://localhost:3011";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions";
+import { db } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,17 +12,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Укажите чат и текст" }, { status: 400 });
     }
 
-    const res = await fetch(`${TG_SENDER}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatUsername, text }),
-      signal: AbortSignal.timeout(30000),
-    });
+    const account = await db.tgAccount.findFirst();
+    if (!account || !account.session) {
+      return NextResponse.json({ error: "Аккаунт не подключён" }, { status: 400 });
+    }
 
-    const data = await res.json();
-    return NextResponse.json(data, { status: data.success ? 200 : 500 });
+    const session = new StringSession(account.session);
+    const client = new TelegramClient(session, account.apiId, account.apiHash, {
+      connectionRetries: 3,
+    });
+    await client.connect();
+
+    // Resolve username
+    const username = chatUsername
+      .replace("https://t.me/", "")
+      .replace("t.me/", "")
+      .replace("@", "");
+
+    const entity = await client.getEntity(username);
+    await client.sendMessage(entity, { message: text });
+
+    await client.disconnect();
+
+    return NextResponse.json({ success: true, message: "Сообщение отправлено" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка отправки";
+    console.error("TG send error:", msg);
     return NextResponse.json({ error: msg }, { status: 503 });
   }
 }

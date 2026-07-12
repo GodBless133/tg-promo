@@ -1,16 +1,22 @@
 import { NextResponse } from "next/server";
-
-const TG_SENDER = "http://localhost:3011";
+import { db } from "@/lib/db";
 
 export async function POST() {
   try {
-    const res = await fetch(`${TG_SENDER}/auth/disconnect`, {
-      method: "DELETE",
-      signal: AbortSignal.timeout(10000),
-    });
-
-    const data = await res.json();
-    return NextResponse.json(data);
+    const account = await db.tgAccount.findFirst();
+    if (account) {
+      await db.tgAccount.update({
+        where: { id: account.id },
+        data: {
+          session: null,
+          status: "disconnected",
+          firstName: null,
+          lastName: null,
+          username: null,
+        },
+      });
+    }
+    return NextResponse.json({ success: true, message: "Аккаунт отключён" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка отключения";
     return NextResponse.json({ error: msg }, { status: 503 });
