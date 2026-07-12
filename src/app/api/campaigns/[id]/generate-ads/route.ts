@@ -3,21 +3,25 @@ import { db } from "@/lib/db";
 
 export const maxDuration = 60;
 
+const DEFAULT_BASE_URL = "https://text.pollinations.ai/openai";
+const DEFAULT_MODEL = "openai";
+
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY не настроен. Добавьте ключ в переменные окружения Railway.");
-  }
+  const baseUrl = process.env.OPENAI_BASE_URL || (apiKey ? "https://api.openai.com/v1" : DEFAULT_BASE_URL);
+  const model = process.env.OPENAI_MODEL || (apiKey ? "gpt-4o-mini" : DEFAULT_MODEL);
 
-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages: [
@@ -110,7 +114,6 @@ export async function POST(
       }, { status: 500 });
     }
 
-    // Get next variant number
     const maxVariant = await db.adPost.aggregate({
       where: { campaignId: id },
       _max: { variant: true },

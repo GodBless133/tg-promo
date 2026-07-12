@@ -3,21 +3,25 @@ import { db } from "@/lib/db";
 
 export const maxDuration = 120;
 
+const DEFAULT_BASE_URL = "https://text.pollinations.ai/openai";
+const DEFAULT_MODEL = "openai";
+
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY не настроен. Добавьте ключ в переменные окружения Railway.");
-  }
+  const baseUrl = process.env.OPENAI_BASE_URL || (apiKey ? "https://api.openai.com/v1" : DEFAULT_BASE_URL);
+  const model = process.env.OPENAI_MODEL || (apiKey ? "gpt-4o-mini" : DEFAULT_MODEL);
 
-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages: [
@@ -56,7 +60,7 @@ export async function POST(
     }
 
     const systemPrompt = `Ты эксперт по поиску Telegram каналов и чатов для рекламы.
-Твоя задача — предложить реальные или правдоподобные Telegram каналы/чаты по заданной тематике.
+Твоя задача — предложить реальные Telegram каналы/чаты по заданной тематике.
 
 ПРАВИЛА:
 - tgLink ВСЕГДА начинается с "t.me/"
@@ -67,7 +71,7 @@ export async function POST(
 Формат ответа — ТОЛЬКО JSON массив без markdown, без комментариев:
 [{"title":"Имя канала","tgLink":"t.me/example","description":"Описание канала","membersCount":5000,"category":"Категория"}]
 
-Верни 4-8 результатов. Если знаешь реальные популярные каналы по теме — используй их.`;
+Верни 4-8 результатов. Используй реальные известные Telegram каналы по теме если знаешь.`;
 
     const userPrompt = `Найди Telegram каналы и чаты для размещения рекламы по теме: "${topic}".
 Тип рекламируемого ресурса: ${campaign.targetType === "bot" ? "бот" : campaign.targetType === "chat" ? "чат" : "канал"}.
@@ -115,7 +119,6 @@ export async function POST(
       });
     }
 
-    // Save to DB, skip duplicates
     const saved = [];
     for (const chat of chats) {
       const existing = await db.targetChat.findFirst({
