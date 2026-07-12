@@ -51,3 +51,4 @@ download/
 tool-results/
 mini-services/scheduler/node_modules/
 mini-services/scheduler/bun.lock
+mini-services/ai-service/
