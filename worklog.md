@@ -28,3 +28,24 @@ Stage Summary:
 - Next.js routes at /api/campaigns/[id]/search-chats and /generate-ads proxy to AI service on port 3010
 - AI service uses z-ai CLI + better-sqlite3, avoiding SDK-in-Next.js OOM issues
 - All lint checks pass
+---
+Task ID: 2
+Agent: main
+Task: Fix AI features for Railway deployment and push to GitHub
+
+Work Log:
+- Analyzed current architecture: AI routes were proxies to mini-service on port 3010 using z-ai CLI
+- z-ai CLI only works in local sandbox, not on Railway
+- Rewrote search-chats/route.ts to use direct OpenAI-compatible API calls via fetch
+- Rewrote generate-ads/route.ts to use direct OpenAI-compatible API calls via fetch
+- Both routes now use Prisma ORM to read/write campaign data directly
+- Removed z-ai-web-dev-sdk from package.json dependencies
+- Added mini-services/ai-service/ to .gitignore
+- Pushed commit 87acece to GitHub (main branch)
+
+Stage Summary:
+- AI features now work via OPENAI_API_KEY environment variable
+- Supports any OpenAI-compatible provider via OPENAI_BASE_URL
+- Default model: gpt-4o-mini (configurable via OPENAI_MODEL)
+- Railway auto-deploy will pick up the changes from GitHub push
+- User needs to set OPENAI_API_KEY in Railway environment variables
