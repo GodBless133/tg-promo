@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
+import { Api } from "telegram/tl";
 import { db } from "@/lib/db";
 import { getTgCodeHash, clearTgCodeHash } from "@/lib/tg-state";
 
@@ -26,12 +27,16 @@ export async function POST(req: NextRequest) {
 
     try {
       const codeHash = getTgCodeHash() || "";
-      await client.signIn({
-        phone: account.phone,
-        code,
-        phoneCodeHash: codeHash,
-      });
 
+      const result = await client.invoke(
+        new Api.auth.SignIn({
+          phoneNumber: account.phone,
+          phoneCodeHash: codeHash,
+          phoneCode: code,
+        })
+      );
+
+      // Success
       const sessionStr = client.session.save();
       const me = await client.getMe();
 
@@ -56,9 +61,10 @@ export async function POST(req: NextRequest) {
       });
     } catch (e: unknown) {
       await client.disconnect();
-      const err = e as Error;
+      const err = e as any;
 
-      if (err.message?.includes("PASSWORD_HASH_INVALID") || err.message?.includes("Two-steps verification")) {
+      // Check for 2FA required (SessionPasswordNeededError)
+      if (err?.errorMessage === "SESSION_PASSWORD_NEEDED" || err?.constructor?.name === "SessionPasswordNeededError") {
         await db.tgAccount.update({
           where: { id: account.id },
           data: { status: "awaiting_2fa" },

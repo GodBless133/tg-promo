@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
+import { Api } from "telegram/tl";
 import { db } from "@/lib/db";
 import { setTgCodeHash } from "@/lib/tg-state";
 
@@ -12,23 +13,13 @@ export async function GET() {
     if (!account) {
       return NextResponse.json({ connected: false, status: "none", phone: null });
     }
-
     if (account.status === "connected" && account.session) {
       return NextResponse.json({
-        connected: true,
-        status: "connected",
-        phone: account.phone,
-        firstName: account.firstName,
-        lastName: account.lastName,
-        username: account.username,
+        connected: true, status: "connected", phone: account.phone,
+        firstName: account.firstName, lastName: account.lastName, username: account.username,
       });
     }
-
-    return NextResponse.json({
-      connected: false,
-      status: account.status,
-      phone: account.phone,
-    });
+    return NextResponse.json({ connected: false, status: account.status, phone: account.phone });
   } catch {
     return NextResponse.json({ connected: false, status: "none", phone: null });
   }
@@ -43,26 +34,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Заполните все поля" }, { status: 400 });
     }
 
-    // Disconnect previous
     if (_client) {
       try { await _client.disconnect(); } catch {}
       _client = null;
     }
 
     const session = new StringSession("");
-    _client = new TelegramClient(session, Number(apiId), apiHash, {
-      connectionRetries: 3,
-    });
-
+    _client = new TelegramClient(session, Number(apiId), apiHash, { connectionRetries: 3 });
     await _client.connect();
 
-    const result = await _client.sendCodeRequest({
-      phone,
-      apiId: Number(apiId),
-      apiHash,
-    });
+    // Send code using low-level API
+    const result = await _client.invoke(
+      new Api.auth.SendCode({
+        phoneNumber: phone,
+        apiId: Number(apiId),
+        apiHash,
+        settings: new Api.CodeSettings({}),
+      })
+    );
 
-    setTgCodeHash(result.phoneCodeHash);
+    // result is auth.SentCode
+    const phoneCodeHash = (result as any).phoneCodeHash;
+    setTgCodeHash(phoneCodeHash);
 
     // Save to DB
     const existing = await db.tgAccount.findFirst();
