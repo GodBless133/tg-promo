@@ -52,4 +52,5 @@ tool-results/
 mini-services/scheduler/node_modules/
 mini-services/scheduler/bun.lock
 mini-services/ai-service/
-mini-services/tg-sender/__pycache__/
+mini-services/tg-sender/__pycache__/db/*.db-shm
+db/*.db-wal
