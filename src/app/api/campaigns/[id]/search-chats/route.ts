@@ -4,9 +4,7 @@ import { db } from "@/lib/db";
 export const maxDuration = 120;
 
 const DEFAULT_BASE_URL = "https://text.pollinations.ai/openai";
-
-// Different models to try as fallbacks
-const FALLBACK_MODELS = ["openai", "mistral", "claude-hybridspace", "qwen"];
+const FALLBACK_MODELS = ["openai", "mistral", "qwen"];
 
 async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 3000): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -19,13 +17,8 @@ async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 300
         await new Promise((r) => setTimeout(r, 2000 * attempt));
       }
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-
-      if (apiKey) {
-        headers["Authorization"] = `Bearer ${apiKey}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
       try {
         const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -44,39 +37,37 @@ async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 300
         });
 
         if (res.status === 429) continue;
-
         if (!res.ok) {
-          console.error(`[LLM] ${model} returned ${res.status}`);
-          break; // try next model
+          console.error(`[SEARCH] ${model} HTTP ${res.status}`);
+          break;
         }
 
         const text = await res.text();
-        if (!text || !text.trim()) {
-          console.error(`[LLM] ${model} returned empty body`);
+        if (!text?.trim()) {
+          console.error(`[SEARCH] ${model} empty body`);
           break;
         }
 
         let data: any;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          console.error(`[LLM] ${model} returned invalid JSON`);
+        try { data = JSON.parse(text); } catch {
+          console.error(`[SEARCH] ${model} invalid JSON response`);
           break;
         }
 
         const content = data.choices?.[0]?.message?.content;
-        if (!content || !content.trim()) {
-          console.error(`[LLM] ${model} returned empty content`);
-          continue; // retry with same model
+        if (!content?.trim()) {
+          console.error(`[SEARCH] ${model} empty content`);
+          continue;
         }
 
+        console.log(`[SEARCH] Got ${content.length} chars from ${model}`);
         return content;
       } catch (e: any) {
         if (e.name === "AbortError") {
-          console.error(`[LLM] ${model} timed out`);
+          console.error(`[SEARCH] ${model} timeout`);
           break;
         }
-        console.error(`[LLM] ${model} error:`, e.message);
+        console.error(`[SEARCH] ${model} error:`, e.message);
         break;
       }
     }
@@ -85,16 +76,82 @@ async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 300
   throw new Error("ИИ временно недоступен. Попробуйте через 30 секунд.");
 }
 
-// Try to resolve real member counts via TG sender service
+/** Normalize a Telegram link to t.me/username format */
+function normalizeTgLink(link: unknown): string | null {
+  if (!link || typeof link !== "string") return null;
+  const s = link.trim();
+  if (s.startsWith("t.me/")) return s;
+  if (s.startsWith("@")) return "t.me/" + s.slice(1);
+  if (s.startsWith("https://t.me/")) return "t.me/" + s.slice(13);
+  if (s.startsWith("http://t.me/")) return "t.me/" + s.slice(12);
+  // Bare username (no special chars)
+  if (/^[a-zA-Z_]\w{2,30}$/.test(s)) return "t.me/" + s;
+  return null;
+}
+
+/** Parse LLM output into chat objects, very forgiving */
+function parseChats(raw: string): Array<{ title: string; tgLink: string; description: string; membersCount: number; category: string }> {
+  const cleaned = raw
+    .replace(/```json\n?/g, "")
+    .replace(/```\n?/g, "")
+    .trim();
+
+  // Find JSON array
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start === -1 || end <= start) {
+    console.error("[SEARCH] No JSON array found in:", cleaned.slice(0, 200));
+    return [];
+  }
+
+  const jsonStr = cleaned.substring(start, end + 1);
+
+  let parsed: any[];
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e) {
+    console.error("[SEARCH] JSON parse failed:", (e as Error).message);
+    // Try to fix common issues: trailing commas
+    try {
+      parsed = JSON.parse(jsonStr.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]"));
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  const chats: Array<{ title: string; tgLink: string; description: string; membersCount: number; category: string }> = [];
+
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+
+    const title = String(item.title || "").trim();
+    const tgLink = normalizeTgLink(item.tgLink || item.link || item.username);
+    if (!title || !tgLink) continue;
+
+    chats.push({
+      title,
+      tgLink,
+      description: String(item.description || "").trim(),
+      membersCount: parseInt(item.membersCount || item.members || item.subscribers || "0", 10) || 0,
+      category: String(item.category || item.cat || "").trim(),
+    });
+  }
+
+  console.log(`[SEARCH] Parsed ${chats.length} valid chats from ${parsed.length} items`);
+  return chats;
+}
+
+// Verify member counts via TG sender
 async function resolveMemberCounts(links: string[]): Promise<Record<string, { title: string; members: number }>> {
   const result: Record<string, { title: string; members: number }> = {};
-
   try {
     const res = await fetch("http://localhost:3011/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ links }),
-      signal: AbortSignal.timeout(30000), // 30s timeout
+      signal: AbortSignal.timeout(30000),
     });
     if (res.ok) {
       const data = await res.json();
@@ -106,10 +163,7 @@ async function resolveMemberCounts(links: string[]): Promise<Record<string, { ti
         }
       }
     }
-  } catch {
-    // TG sender not available — use AI estimates
-  }
-
+  } catch { /* TG sender not available */ }
   return result;
 }
 
@@ -119,112 +173,77 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-
     const campaign = await db.campaign.findUnique({ where: { id } });
     if (!campaign) {
       return NextResponse.json({ error: "Кампания не найдена" }, { status: 404 });
     }
 
     const topic = campaign.topic || campaign.name;
-    if (!topic || topic.trim().length === 0) {
+    if (!topic?.trim()) {
       return NextResponse.json({ error: "Укажите тему кампании" }, { status: 400 });
     }
 
     const typeLabel =
-      campaign.targetType === "bot"
-        ? "бота"
-        : campaign.targetType === "chat"
-          ? "чата"
-          : "канала";
+      campaign.targetType === "bot" ? "бота"
+        : campaign.targetType === "chat" ? "чата"
+        : "канала";
 
-    const systemPrompt = `Ты эксперт по Telegram-рекламе. Твоя задача — найти РЕАЛЬНЫЕ Telegram ГРУППЫ И ЧАТЫ (НЕ каналы!) для размещения рекламы.
+    const systemPrompt = `Ты эксперт по Telegram-рекламе. Найди РЕАЛЬНЫЕ Telegram ГРУППЫ для рекламы.
 
-ВАЖНЫЕ ПРАВИЛА:
-1. Ищи ТОЛЬКО группы и чаты (где пользователи могут писать), НЕ каналы (где только админ публикует)
-2. Все группы должны быть РЕАЛЬНЫМИ — используй свои знания о популярных Telegram группах
-3. Минимум участников: 3 000. Предпочтительно 10 000+ и 50 000+
-4. Разнообразь: большие (50к-500к), средние (10к-50к) и маленькие (3к-10к)
-5. tgLink — ВСЕГДА в формате "t.me/username" (без @, без https://)
-6. membersCount — ориентируйся на реальное количество участников
+ПРАВИЛА:
+- Только группы/чаты (НЕ каналы и НЕ боты)
+- Реальные группы, минимум 3000 участников
+- tgLink в формате "t.me/username"
+- membersCount — примерное реальное число участников
 
-Формат ответа — ТОЛЬКО JSON массив без markdown, без комментариев, без обёрток:
-[{"title":"Название группы","tgLink":"t.me/example_chat","description":"Краткое описание на русском — для кого эта группа","membersCount":25000,"category":"Категория"}]
+Ответь ТОЛЬКО JSON массив (без markdown):
+[{"title":"Имя","tgLink":"t.me/name","description":"Описание на русском","membersCount":10000,"category":"Категория"}]
 
-Верни 15-20 результатов. Если не знаешь достаточно групп по теме — заполни максимально возможное количество (минимум 10).`;
+Верни 15 результатов.`;
 
-    const userPrompt = `Найди популярные Telegram ГРУППЫ И ЧАТЫ для размещения рекламы по теме: "${topic}".
-Рекламируемый ресурс: ${typeLabel}.
+    const userPrompt = `Найди 15 популярных Telegram ГРУПП по теме "${topic}" для рекламы ${typeLabel}.
 Описание: ${campaign.description || "не указано"}.
+Группы от 3000 до 500000 участников.`;
 
-Найди реальные, популярные группы где много активных участников. Включи группы разного размера — от 3 000 до 500 000 участников. Группы должны быть тематически релевантны для "${topic}".`;
+    const raw = await callLLM(systemPrompt, userPrompt, 3000);
+    let chats = parseChats(raw);
 
-    const raw = await callLLM(systemPrompt, userPrompt, 4000);
-    const cleaned = raw
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
-
-    let chats: Array<{
-      title: string;
-      tgLink: string;
-      description: string;
-      membersCount: number;
-      category: string;
-    }> = [];
-
-    try {
-      const start = cleaned.indexOf("[");
-      const end = cleaned.lastIndexOf("]");
-      if (start !== -1 && end > start) {
-        const jsonStr = cleaned.substring(start, end + 1);
-        const parsed = JSON.parse(jsonStr);
-        if (Array.isArray(parsed)) {
-          chats = parsed.filter(
-            (c: Record<string, unknown>) =>
-              c.title && c.tgLink && String(c.tgLink).includes("t.me")
-          );
-        }
-      }
-    } catch {
-      console.error("JSON parse error for search results");
+    // If first attempt failed, try with simpler prompt
+    if (chats.length === 0) {
+      console.log("[SEARCH] First attempt empty, retrying with simpler prompt...");
+      const simplePrompt = `Назови 15 популярных Telegram групп по теме "${topic}". Формат: JSON массив с полями title, tgLink (в формате t.me/name), description, membersCount, category.`;
+      const raw2 = await callLLM(
+        "Возвращай только JSON массив. Никакого markdown.",
+        simplePrompt,
+        2000
+      );
+      chats = parseChats(raw2);
     }
 
     if (chats.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: "Не удалось найти чаты. Попробуйте другую тему.",
-        count: 0,
-        chats: [],
-      });
+      return NextResponse.json({ success: false, error: "Не удалось найти чаты. Попробуйте другую тему.", count: 0, chats: [] });
     }
 
-    // Sort by member count descending (largest first)
+    // Sort by members desc
     chats.sort((a, b) => (b.membersCount || 0) - (a.membersCount || 0));
 
-    // Try to verify member counts via TG API
-    const links = chats.map((c) => c.tgLink);
-    const verified = await resolveMemberCounts(links);
+    // Verify via TG API if available
+    const verified = await resolveMemberCounts(chats.map((c) => c.tgLink));
 
     const saved = [];
     for (const chat of chats) {
-      const existing = await db.targetChat.findFirst({
-        where: { campaignId: id, tgLink: chat.tgLink },
-      });
+      const existing = await db.targetChat.findFirst({ where: { campaignId: id, tgLink: chat.tgLink } });
       if (existing) continue;
 
-      // Use verified member count if available
       const v = verified[chat.tgLink];
-      const membersCount = v ? v.members : (chat.membersCount || null);
-      const title = v && v.title ? v.title : chat.title;
-
       try {
         const saved_chat = await db.targetChat.create({
           data: {
             campaignId: id,
-            title,
+            title: v?.title || chat.title,
             tgLink: chat.tgLink,
             description: chat.description || null,
-            membersCount,
+            membersCount: v?.members || chat.membersCount || null,
             category: chat.category || null,
             status: "found",
           },
@@ -235,14 +254,10 @@ export async function POST(
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      count: saved.length,
-      chats: saved,
-    });
+    return NextResponse.json({ success: true, count: saved.length, chats: saved });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Ошибка поиска чатов";
-    console.error("Search chats error:", message);
+    console.error("[SEARCH] Fatal:", message);
     return NextResponse.json({ error: message }, { status: 503 });
   }
 }
