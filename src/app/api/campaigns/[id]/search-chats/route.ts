@@ -4,54 +4,85 @@ import { db } from "@/lib/db";
 export const maxDuration = 120;
 
 const DEFAULT_BASE_URL = "https://text.pollinations.ai/openai";
-const DEFAULT_MODEL = "openai";
 
-async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 4000): Promise<string> {
+// Different models to try as fallbacks
+const FALLBACK_MODELS = ["openai", "mistral", "claude-hybridspace", "qwen"];
+
+async function callLLM(systemPrompt: string, userPrompt: string, maxTokens = 3000): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   const baseUrl = process.env.OPENAI_BASE_URL || (apiKey ? "https://api.openai.com/v1" : DEFAULT_BASE_URL);
-  const model = process.env.OPENAI_MODEL || (apiKey ? "gpt-4o-mini" : DEFAULT_MODEL);
+  const models = apiKey ? [process.env.OPENAI_MODEL || "gpt-4o-mini"] : FALLBACK_MODELS;
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
 
-  if (apiKey) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (apiKey) {
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      }
+
+      try {
+        const res = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+            temperature: 0.8,
+            max_tokens: maxTokens,
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+
+        if (res.status === 429) continue;
+
+        if (!res.ok) {
+          console.error(`[LLM] ${model} returned ${res.status}`);
+          break; // try next model
+        }
+
+        const text = await res.text();
+        if (!text || !text.trim()) {
+          console.error(`[LLM] ${model} returned empty body`);
+          break;
+        }
+
+        let data: any;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          console.error(`[LLM] ${model} returned invalid JSON`);
+          break;
+        }
+
+        const content = data.choices?.[0]?.message?.content;
+        if (!content || !content.trim()) {
+          console.error(`[LLM] ${model} returned empty content`);
+          continue; // retry with same model
+        }
+
+        return content;
+      } catch (e: any) {
+        if (e.name === "AbortError") {
+          console.error(`[LLM] ${model} timed out`);
+          break;
+        }
+        console.error(`[LLM] ${model} error:`, e.message);
+        break;
+      }
+    }
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, 3000 * attempt));
-    }
-
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.8,
-        max_tokens: maxTokens,
-      }),
-    });
-
-    if (res.status === 429) continue;
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`LLM API ошибка ${res.status}: ${err.slice(0, 300)}`);
-    }
-
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error("Пустой ответ от ИИ");
-    return content;
-  }
-
-  throw new Error("Сервер ИИ перегружен. Попробуйте через минуту.");
+  throw new Error("ИИ временно недоступен. Попробуйте через 30 секунд.");
 }
 
 // Try to resolve real member counts via TG sender service
